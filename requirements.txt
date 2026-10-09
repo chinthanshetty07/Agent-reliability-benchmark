@@ -1,0 +1,4 @@
+# Tested with Python 3.14 on macOS (Apple Silicon).
+requests==2.34.2    # talks to the Ollama API (tasks/ai_runner.py)
+pandas==3.0.6       # tables for the dashboard (dashboard.py)
+streamlit==1.65.0   # the dashboard web app (dashboard.py)

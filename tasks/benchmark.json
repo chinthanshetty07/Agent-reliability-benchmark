@@ -1,0 +1,130 @@
+[
+  {
+    "task_id": "finance_001",
+    "category": "financial_calculation",
+    "difficulty": "easy",
+    "question": "A company has revenue of $10,000 and expenses of $7,000. What is its profit?",
+    "expected_answer": "3000",
+    "success_criteria": "The answer identifies the profit as $3,000."
+  },
+  {
+    "task_id": "finance_002",
+    "category": "financial_calculation",
+    "difficulty": "easy",
+    "question": "A company earns $20,000 in revenue and spends $12,500. Calculate its profit.",
+    "expected_answer": "7500",
+    "success_criteria": "The answer identifies the profit as $7,500."
+  },
+  {
+    "task_id": "finance_003",
+    "category": "financial_calculation",
+    "difficulty": "easy",
+    "question": "A business has revenue of $8,000 and expenses of $9,200. What is its profit or loss?",
+    "expected_answer": "-1200",
+    "success_criteria": "The answer identifies a loss of $1,200."
+  },
+  {
+    "task_id": "finance_004",
+    "category": "financial_calculation",
+    "difficulty": "easy",
+    "question": "A store has sales revenue of $50,000 and cost of goods sold of $32,000. What is its gross profit?",
+    "expected_answer": "18000",
+    "success_criteria": "The answer identifies the gross profit as $18,000."
+  },
+  {
+    "task_id": "finance_005",
+    "category": "profitability_ratio",
+    "difficulty": "easy",
+    "question": "A company has revenue of $40,000 and net profit of $10,000. What is its net profit margin? Give the answer as a percentage.",
+    "expected_answer": "25",
+    "success_criteria": "The answer identifies the net profit margin as 25%."
+  },
+  {
+    "task_id": "finance_006",
+    "category": "interest",
+    "difficulty": "easy",
+    "question": "You deposit $5,000 in an account paying 4% simple interest per year. How much interest do you earn in 3 years?",
+    "expected_answer": "600",
+    "success_criteria": "The answer identifies the interest earned as $600."
+  },
+  {
+    "task_id": "finance_007",
+    "category": "interest",
+    "difficulty": "medium",
+    "question": "You invest $1,000 at 5% interest per year, compounded annually. What is the total value of the investment after 2 years? Round to the nearest cent.",
+    "expected_answer": "1102.50",
+    "success_criteria": "The answer identifies the final value as $1,102.50."
+  },
+  {
+    "task_id": "finance_008",
+    "category": "break_even",
+    "difficulty": "medium",
+    "question": "A product sells for $50 per unit and costs $30 per unit to make. The company's fixed costs are $12,000. How many units must it sell to break even?",
+    "expected_answer": "600",
+    "success_criteria": "The answer identifies the break-even point as 600 units."
+  },
+  {
+    "task_id": "finance_009",
+    "category": "investment_return",
+    "difficulty": "medium",
+    "question": "An investor buys shares for $8,000 and later sells them for $9,200. There are no fees or dividends. What is the return on investment (ROI)? Give the answer as a percentage.",
+    "expected_answer": "15",
+    "success_criteria": "The answer identifies the ROI as 15%."
+  },
+  {
+    "task_id": "finance_010",
+    "category": "financial_calculation",
+    "difficulty": "medium",
+    "question": "A shop earns $15,000 in revenue in a month. It pays $6,000 in rent, $8,500 in salaries, and $1,200 in utilities. What is its profit or loss for the month?",
+    "expected_answer": "-700",
+    "success_criteria": "The answer identifies a loss of $700."
+  },
+  {
+    "task_id": "finance_011",
+    "category": "financial_analysis",
+    "difficulty": "medium",
+    "question": "A company's revenue fell from $80,000 last year to $68,000 this year. What is the percentage change in revenue? Give the answer as a percentage, using a negative number if revenue decreased.",
+    "expected_answer": "-15",
+    "success_criteria": "The answer identifies the change as -15% (a 15% decrease)."
+  },
+  {
+    "task_id": "finance_012",
+    "category": "financial_calculation",
+    "difficulty": "medium",
+    "question": "A company has revenue of $120,000 and total expenses of $85,000. It pays income tax of 20% on its profit. What is its profit after tax?",
+    "expected_answer": "28000",
+    "success_criteria": "The answer identifies the after-tax profit as $28,000."
+  },
+  {
+    "task_id": "finance_013",
+    "category": "interest",
+    "difficulty": "hard",
+    "question": "You invest $10,000 at an annual interest rate of 8%, compounded quarterly. What is the total value of the investment after 1 year? Round to the nearest cent.",
+    "expected_answer": "10824.32",
+    "success_criteria": "The answer identifies the final value as $10,824.32."
+  },
+  {
+    "task_id": "finance_014",
+    "category": "financial_ratio",
+    "difficulty": "easy",
+    "question": "A company has current assets of $45,000 and current liabilities of $30,000. What is its current ratio?",
+    "expected_answer": "1.5",
+    "success_criteria": "The answer identifies the current ratio as 1.5."
+  },
+  {
+    "task_id": "finance_015",
+    "category": "financial_ratio",
+    "difficulty": "hard",
+    "question": "A company's cost of goods sold for the year is $90,000. Its inventory was $20,000 at the start of the year and $10,000 at the end. Using average inventory, what is its inventory turnover ratio?",
+    "expected_answer": "6",
+    "success_criteria": "The answer identifies the inventory turnover as 6 times."
+  },
+  {
+    "task_id": "finance_016",
+    "category": "accounting",
+    "difficulty": "medium",
+    "question": "A machine costs $25,000, has a salvage value of $5,000, and a useful life of 4 years. Using straight-line depreciation, what is the annual depreciation expense?",
+    "expected_answer": "5000",
+    "success_criteria": "The answer identifies the annual depreciation as $5,000."
+  }
+]

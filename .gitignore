@@ -1,0 +1,16 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Temporary file the runner writes before swapping it into results.json
+*.json.tmp
+
+# Automatic backups of old runs (can be large and noisy)
+results/history/
+
+# Local editor / tool settings
+.claude/
+.vscode/
+.DS_Store
