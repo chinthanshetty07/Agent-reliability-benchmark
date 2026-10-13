@@ -58,6 +58,30 @@ class ModelConfig:
     task_time_limit: int = 300   # seconds allowed for one whole answer, so nothing hangs forever
 
 
+def build_model_config(base_url, model_id, api_key=None):
+    """
+    Check the given settings and turn them into a ModelConfig.
+    Used by both the runner (values from environment variables) and the
+    dashboard (values typed into a form). No network request happens here,
+    so a bad address is rejected before anything is sent.
+    """
+    base_url = (base_url or "").strip().rstrip("/")
+    model_id = (model_id or "").strip()
+    api_key = (api_key or "").strip() or None
+
+    parts = urlsplit(base_url)
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        # The value itself is not repeated here, in case a secret was pasted into it.
+        raise ModelConfigError(
+            "Base URL must be a full address starting with http:// or https://, "
+            f"for example {DEFAULT_BASE_URL}"
+        )
+    if not model_id:
+        raise ModelConfigError("Model ID must not be empty.")
+
+    return ModelConfig(base_url=base_url, model_id=model_id, api_key=api_key)
+
+
 def load_model_config(env=None):
     """
     Build a ModelConfig from environment variables.
@@ -65,19 +89,13 @@ def load_model_config(env=None):
     """
     env = os.environ if env is None else env
 
-    base_url = (env.get(ENV_BASE_URL) or DEFAULT_BASE_URL).strip().rstrip("/")
-    model_id = (env.get(ENV_MODEL_ID) or DEFAULT_MODEL_ID).strip()
-    api_key = (env.get(ENV_API_KEY) or "").strip() or None
-
-    parts = urlsplit(base_url)
-    if parts.scheme not in ("http", "https") or not parts.netloc:
-        # The value itself is not repeated here, in case a secret was pasted into it.
-        raise ModelConfigError(
-            f"{ENV_BASE_URL} must be a full address starting with http:// or https://, "
-            f"for example {DEFAULT_BASE_URL}"
-        )
-
-    return ModelConfig(base_url=base_url, model_id=model_id or DEFAULT_MODEL_ID, api_key=api_key)
+    base_url = (env.get(ENV_BASE_URL) or "").strip() or DEFAULT_BASE_URL
+    model_id = (env.get(ENV_MODEL_ID) or "").strip() or DEFAULT_MODEL_ID
+    try:
+        return build_model_config(base_url, model_id, env.get(ENV_API_KEY))
+    except ModelConfigError as error:
+        # Name the variable, so terminal users know which setting to fix.
+        raise ModelConfigError(f"{ENV_BASE_URL}: {error}") from None
 
 
 def safe_base_url(url):

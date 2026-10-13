@@ -91,10 +91,52 @@ class TestLoadConfig(unittest.TestCase):
             model_adapter.load_model_config({"BENCHMARK_BASE_URL": "localhost:11434"})
         self.assertIn("http://", str(caught.exception))
 
+    def test_terminal_error_names_the_variable(self):
+        with self.assertRaises(ModelConfigError) as caught:
+            model_adapter.load_model_config({"BENCHMARK_BASE_URL": "localhost:11434"})
+        self.assertIn("BENCHMARK_BASE_URL", str(caught.exception))
+
     def test_printing_config_does_not_show_key(self):
         config = ModelConfig(api_key=FAKE_KEY)
         self.assertNotIn(FAKE_KEY, repr(config))
         self.assertNotIn(FAKE_KEY, str(config))
+
+
+class TestBuildConfig(unittest.TestCase):
+    """build_model_config() checks values typed into the dashboard form."""
+
+    def test_valid_values(self):
+        config = model_adapter.build_model_config(" https://example.test/v1/ ", " m1 ", f" {FAKE_KEY} ")
+        self.assertEqual(config.base_url, "https://example.test/v1")
+        self.assertEqual(config.model_id, "m1")
+        self.assertEqual(config.api_key, FAKE_KEY)
+
+    def test_blank_key_means_no_key(self):
+        self.assertIsNone(model_adapter.build_model_config("http://h/v1", "m", "   ").api_key)
+
+    def test_invalid_addresses_are_rejected(self):
+        for bad in ["", "   ", "localhost:11434", "ftp://host/v1", "http://", "not a url"]:
+            with self.subTest(base_url=bad), self.assertRaises(ModelConfigError):
+                model_adapter.build_model_config(bad, "m")
+
+    def test_empty_model_id_is_rejected(self):
+        with self.assertRaises(ModelConfigError):
+            model_adapter.build_model_config("http://h/v1", "  ")
+
+    def test_error_does_not_repeat_the_typed_value(self):
+        # Someone might paste a key into the wrong box.
+        with self.assertRaises(ModelConfigError) as caught:
+            model_adapter.build_model_config(FAKE_KEY, "m")
+        self.assertNotIn(FAKE_KEY, str(caught.exception))
+
+    def test_no_network_request_is_made(self):
+        with mock.patch("model_adapter.requests.get") as get, \
+             mock.patch("model_adapter.requests.post") as post:
+            model_adapter.build_model_config("http://h/v1", "m", FAKE_KEY)
+            with self.assertRaises(ModelConfigError):
+                model_adapter.build_model_config("bad", "m")
+        get.assert_not_called()
+        post.assert_not_called()
 
 
 class TestHeaders(unittest.TestCase):

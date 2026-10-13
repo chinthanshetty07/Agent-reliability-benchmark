@@ -69,11 +69,15 @@ task was answered correctly.
 ### 3. Open the dashboard
 
 ```bash
-streamlit run dashboard.py
+streamlit run dashboard.py --server.address localhost
 ```
 
 Then open http://localhost:8501. It reads `results/results.json` and, if present,
 `results/repeated_trials/reliability_report.json`.
+
+`--server.address localhost` makes the dashboard reachable only from this computer.
+Without it, Streamlit also listens on your network address, so other devices on
+the same network (for example, the same Wi-Fi) could open it.
 
 ### Tests (no Ollama needed)
 
@@ -133,6 +137,38 @@ records a clear error; it doesn't record a wrong score.
 **Comparing models.** `repeat_benchmark.py` does not yet check that every trial
 used the same model. Don't switch models between trial 1 and later trials.
 
+### Test a model connection from the dashboard
+
+The dashboard sidebar has a **Configure model** form:
+
+1. Run `streamlit run dashboard.py --server.address localhost` and open
+   http://localhost:8501.
+2. Check or change the **Base URL** and **Model ID**. They are pre-filled from
+   `BENCHMARK_BASE_URL` and `BENCHMARK_MODEL_ID` when set, otherwise the Ollama
+   defaults. Login details in a pre-filled address are not shown.
+3. Enter an **API key** only if the service needs one. It is never pre-filled.
+4. Click **Test connection**.
+
+What the test does:
+- It first checks that the Base URL starts with `http://` or `https://` and that
+  the Model ID isn't empty. If not, nothing is sent.
+- It then asks the server for its model list (`GET /models`) and reports whether
+  your model is on it. It does **not** ask the model a question, so no text is
+  generated and no tokens are used. Some providers may still count it toward
+  request limits.
+
+What it does not do:
+- Settings are kept **only in the dashboard's memory** for your current browser
+  session. Nothing is saved to disk.
+- Refreshing the page clears the visible form and starts a new session. The
+  previous, disconnected session (including its settings and key) may stay in
+  the dashboard's memory for a while before Streamlit removes it; by default,
+  at least about 2 minutes (`server.disconnectedSessionTTL`).
+- Stopping the dashboard program clears all of its in-memory settings.
+- It does **not** change which model the benchmark uses. `python3 tasks/ai_runner.py`
+  still reads the `BENCHMARK_*` environment variables.
+- The key is never shown on the page or in error messages, and never saved.
+
 ## How correctness is checked
 
 The model is asked to end its reply with `Final answer: <number>`.
@@ -151,9 +187,10 @@ correct.
 | `tasks/model_adapter.py` | Talks to the model server: settings, API key, streaming request, and model check. |
 | `tasks/grading.py` | Finds the model's final number and compares it with `expected_answer`. |
 | `repeat_benchmark.py` | Runs the benchmark several times and measures per-task consistency. |
-| `dashboard.py` | Streamlit dashboard for the results. |
+| `dashboard.py` | Streamlit dashboard for the results, plus a sidebar form to test a model connection. |
 | `tests/test_benchmark.py` | Unit tests for grading, task validation, and error handling. |
 | `tests/test_model_adapter.py` | Unit tests for model settings, requests, and keeping the API key out of results. |
+| `tests/test_dashboard_model_config.py` | Tests for the dashboard's connection form, using fake server replies. |
 | `results/` | Benchmark output. |
 
 ## Scope and limitations

@@ -1,5 +1,7 @@
 
 import json
+import os
+import sys
 from pathlib import Path
 
 import pandas as pd
@@ -11,11 +13,79 @@ REPORT_FILE = (
     ROOT / "results" / "repeated_trials" / "reliability_report.json"
 )
 
+# The model adapter lives in tasks/. Add it to the import path once.
+TASKS_DIR = str(ROOT / "tasks")
+if TASKS_DIR not in sys.path:
+    sys.path.insert(0, TASKS_DIR)
+import model_adapter  # noqa: E402
+
 st.set_page_config(
     page_title="AI Agent Reliability Benchmark",
     page_icon="📊",
     layout="wide",
 )
+
+
+def run_connection_test(base_url, model_id, api_key):
+    """
+    Check the typed settings, then ask the server which models it has
+    (GET /models). This never asks the model a question, so it generates
+    no output and uses no tokens. Every message shown has the key removed.
+    Deliberately NOT cached: Streamlit caches are shared by all users.
+    """
+    try:
+        # Validates the address first; nothing is sent if it is invalid.
+        config = model_adapter.build_model_config(base_url, model_id, api_key)
+    except model_adapter.ModelConfigError as error:
+        st.error(str(error))
+        return
+
+    try:
+        problem = model_adapter.check_model_available(config)
+    except Exception as error:   # show a short, redacted message instead of a traceback
+        problem = f"Unexpected error while testing the connection: {type(error).__name__}: {error}"
+
+    if problem:
+        st.error(model_adapter.redact(problem, config))
+    else:
+        where = model_adapter.safe_base_url(config.base_url)
+        st.success(f"Connected to {where}. Model '{config.model_id}' is available.")
+
+
+def model_connection_panel():
+    """Sidebar form for trying a model connection. Nothing here is saved to disk."""
+    # Pre-fill from the same environment variables the runner uses.
+    # The address is shown without any login details; the key is never pre-filled.
+    default_url = model_adapter.safe_base_url(
+        os.environ.get(model_adapter.ENV_BASE_URL, "").strip() or model_adapter.DEFAULT_BASE_URL
+    )
+    default_model = (
+        os.environ.get(model_adapter.ENV_MODEL_ID, "").strip() or model_adapter.DEFAULT_MODEL_ID
+    )
+
+    with st.sidebar:
+        st.header("Configure model")
+        st.caption(
+            "Settings stay in this browser session only and are never saved. "
+            "They are used for this connection test only: the benchmark runner "
+            "(`python3 tasks/ai_runner.py`) still reads the `BENCHMARK_*` environment variables."
+        )
+        with st.form("model_connection"):
+            base_url = st.text_input("Base URL", value=default_url)
+            model_id = st.text_input("Model ID", value=default_model)
+            api_key = st.text_input(
+                "API key (optional)",
+                type="password",
+                help="Only for services that need one. Never saved or displayed.",
+            )
+            submitted = st.form_submit_button("Test connection")
+
+        if submitted:
+            run_connection_test(base_url, model_id, api_key)
+
+
+# Drawn before the results below, so it still works when no results exist yet.
+model_connection_panel()
 
 st.title("AI Agent Reliability Benchmark")
 st.caption("Finance domain · Local model evaluation")
