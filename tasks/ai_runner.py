@@ -8,25 +8,19 @@ from pathlib import Path
 
 import requests
 
+import model_adapter
 from grading import grade_numeric_answer
 
-BASE_URL = "http://127.0.0.1:11434/v1"
-MODEL_ID = "qwen3:4b"
+# Which model to use and how to reach it. These are the local Ollama defaults;
+# main() replaces them with any BENCHMARK_* environment variable settings.
+# (Model communication itself lives in model_adapter.py.)
+MODEL_CONFIG = model_adapter.ModelConfig()
 
 PROJECT_DIR = Path(__file__).parent.parent
 TASK_FILE = PROJECT_DIR / "tasks" / "benchmark.json"
 RESULTS_DIR = PROJECT_DIR / "results"
 RESULT_FILE = RESULTS_DIR / "results.json"
 HISTORY_DIR = RESULTS_DIR / "history"
-
-# qwen3 "thinks" before answering, and the thinking counts toward max_tokens.
-# With only 300 tokens the model ran out while still thinking and returned
-# an empty answer, so we allow much more room.
-MAX_TOKENS = 4096
-
-CONNECT_TIMEOUT = 10    # seconds to wait for Ollama to accept the connection
-READ_TIMEOUT = 120      # seconds to wait for the NEXT streamed chunk (covers model loading)
-TASK_TIME_LIMIT = 300   # seconds allowed for one whole task, so nothing hangs forever
 
 # Asks for a predictable last line so the grader can find the final answer.
 # It does not reveal any answers.
@@ -82,93 +76,13 @@ def get_category(task):
     return task.get("category") or task.get("domain") or "unknown"
 
 
-def check_ollama():
-    """Make sure Ollama is running and the model is installed before starting."""
-    try:
-        response = requests.get(f"{BASE_URL}/models", timeout=CONNECT_TIMEOUT)
-        response.raise_for_status()
-        model_ids = [model.get("id") for model in response.json().get("data", [])]
-    except requests.ConnectionError:
-        sys.exit(
-            f"ERROR: Could not connect to Ollama at {BASE_URL}.\n"
-            "Start it with the Ollama app or run: ollama serve"
-        )
-    except (requests.RequestException, ValueError) as error:
-        sys.exit(f"ERROR: Ollama responded unexpectedly at {BASE_URL}/models: {error}")
-
-    if MODEL_ID not in model_ids:
-        sys.exit(
-            f"ERROR: Model '{MODEL_ID}' is not installed in Ollama.\n"
-            f"Installed models: {', '.join(model_ids) or '(none)'}"
-        )
-
-
 def ask_model(question):
     """
-    Send one question to Ollama using streaming.
+    Send one question to the configured model (see model_adapter.py).
     Returns (answer_text, reasoning_text, finish_reason).
     Raises an exception with a readable message if anything goes wrong.
     """
-    payload = {
-        "model": MODEL_ID,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": question},
-        ],
-        "max_tokens": MAX_TOKENS,
-        "temperature": 0,
-        "stream": True,
-    }
-
-    answer_parts = []
-    reasoning_parts = []
-    finish_reason = None
-    deadline = time.perf_counter() + TASK_TIME_LIMIT
-
-    with requests.post(
-        f"{BASE_URL}/chat/completions",
-        json=payload,
-        stream=True,
-        timeout=(CONNECT_TIMEOUT, READ_TIMEOUT),
-    ) as response:
-        if response.status_code != 200:
-            raise RuntimeError(
-                f"Ollama returned HTTP {response.status_code}: {response.text[:300]}"
-            )
-
-        for line in response.iter_lines(decode_unicode=True):
-            if time.perf_counter() > deadline:
-                raise TimeoutError(f"Task took longer than {TASK_TIME_LIMIT} seconds")
-
-            if not line or not line.startswith("data: "):
-                continue
-
-            data = line[len("data: "):]
-            if data == "[DONE]":
-                break
-
-            try:
-                chunk = json.loads(data)
-            except json.JSONDecodeError:
-                raise ValueError(f"Malformed data from Ollama: {data[:200]}")
-
-            if "error" in chunk:
-                raise RuntimeError(f"Ollama error: {chunk['error']}")
-
-            choices = chunk.get("choices") or []
-            if not choices:
-                continue
-
-            delta = choices[0].get("delta") or {}
-            if delta.get("content"):
-                answer_parts.append(delta["content"])
-            # qwen3's thinking arrives separately in "reasoning".
-            if delta.get("reasoning"):
-                reasoning_parts.append(delta["reasoning"])
-            if choices[0].get("finish_reason"):
-                finish_reason = choices[0]["finish_reason"]
-
-    return "".join(answer_parts), "".join(reasoning_parts), finish_reason
+    return model_adapter.ask_model(MODEL_CONFIG, SYSTEM_PROMPT, question)
 
 
 def run_task(task):
@@ -181,7 +95,7 @@ def run_task(task):
         "difficulty": task.get("difficulty", "unknown") if isinstance(task, dict) else "unknown",
         "question": task.get("question") if isinstance(task, dict) else None,
         "expected_answer": task.get("expected_answer") if isinstance(task, dict) else None,
-        "model": MODEL_ID,
+        "model": MODEL_CONFIG.model_id,
         "model_answer": "",
         "model_reasoning": "",
         "extracted_answer": None,
@@ -204,11 +118,17 @@ def run_task(task):
     try:
         answer, reasoning, finish_reason = ask_model(task["question"])
     except requests.ConnectTimeout:
-        result["error"] = f"Timed out connecting to Ollama after {CONNECT_TIMEOUT} seconds"
+        result["error"] = (
+            f"Timed out connecting to the model endpoint after "
+            f"{MODEL_CONFIG.connect_timeout} seconds"
+        )
     except requests.ReadTimeout:
-        result["error"] = f"Ollama sent nothing for {READ_TIMEOUT} seconds (read timeout)"
+        result["error"] = (
+            f"The model endpoint sent nothing for {MODEL_CONFIG.read_timeout} seconds "
+            "(read timeout)"
+        )
     except requests.ConnectionError as error:
-        result["error"] = f"Lost connection to Ollama: {error}"
+        result["error"] = f"Lost connection to the model endpoint: {error}"
     except (requests.RequestException, RuntimeError, ValueError, TimeoutError) as error:
         result["error"] = str(error)
     else:
@@ -216,9 +136,12 @@ def run_task(task):
         result["model_reasoning"] = reasoning
         result["finish_reason"] = finish_reason
         if finish_reason == "length":
-            result["warning"] = f"Response was cut off at max_tokens={MAX_TOKENS}"
+            result["warning"] = f"Response was cut off at max_tokens={MODEL_CONFIG.max_tokens}"
         if not answer.strip():
             result["error"] = "Model returned an empty answer"
+
+    # Error text can come from the server, so make sure no secret is saved.
+    result["error"] = model_adapter.redact(result["error"], MODEL_CONFIG)
 
     result["response_time_seconds"] = round(time.perf_counter() - start_time, 2)
 
@@ -278,15 +201,24 @@ def backup_previous_results():
 
 
 def main():
+    global MODEL_CONFIG   # replace the defaults with this run's settings
+    try:
+        MODEL_CONFIG = model_adapter.load_model_config()
+    except model_adapter.ModelConfigError as error:
+        sys.exit(f"ERROR: {error}")
+
     tasks = load_tasks()
-    check_ollama()
+    problem = model_adapter.check_model_available(MODEL_CONFIG)
+    if problem:
+        sys.exit(f"ERROR: {problem}")
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     backup_previous_results()
 
     run_info = {
-        "model": MODEL_ID,
-        "base_url": BASE_URL,
+        "model": MODEL_CONFIG.model_id,
+        # Saved without any login details or ?query part; the API key is never saved.
+        "base_url": model_adapter.safe_base_url(MODEL_CONFIG.base_url),
         "task_file": str(TASK_FILE.relative_to(PROJECT_DIR)),
         "started_at": datetime.now().isoformat(timespec="seconds"),
         "finished_at": None,
@@ -295,7 +227,8 @@ def main():
     results = []
 
     print(f"Loaded {len(tasks)} benchmark tasks.")
-    print(f"Using model: {MODEL_ID}")
+    print(f"Using model: {MODEL_CONFIG.model_id}")
+    print(f"Endpoint: {model_adapter.safe_base_url(MODEL_CONFIG.base_url)}")
 
     try:
         for index, task in enumerate(tasks, start=1):

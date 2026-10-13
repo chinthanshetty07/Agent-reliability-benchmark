@@ -161,7 +161,7 @@ class TestRunTask(unittest.TestCase):
 
     def test_connection_error_is_recorded(self):
         # Port 9 has nothing listening, so the connection is refused.
-        with mock.patch.object(ai_runner, "BASE_URL", "http://127.0.0.1:9/v1"):
+        with mock.patch.object(ai_runner, "MODEL_CONFIG", ai_runner.model_adapter.ModelConfig(base_url="http://127.0.0.1:9/v1")):
             result = ai_runner.run_task(self.task)
         self.assertEqual(result["status"], "error")
         self.assertFalse(result["correct"])
