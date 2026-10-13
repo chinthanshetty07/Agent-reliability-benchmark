@@ -55,6 +55,22 @@ Each task takes roughly 20–60 seconds on an M1 Mac. Results are saved after ev
 task to `results/results.json`. Before a new run, the previous file is copied to
 `results/history/`.
 
+To save a run somewhere else, without touching `results/results.json`, add
+`--results-dir`:
+
+```bash
+python3 tasks/ai_runner.py --results-dir results/runs/my-test
+```
+
+The run then writes `results.json` (and its `history/` backups) only inside that
+folder, and creates the folder if needed. A relative path is taken from the folder
+you run the command in. Without `--results-dir`, everything goes to `results/` as
+before. The run stops with an error, before contacting the model or writing
+anything, if the path is empty, points to an existing file, points to the default
+`results/` folder itself (however it is written, e.g. `results`, `./results/` or
+the full path), or the option is misspelled. Folders inside `results/`, such as
+`results/runs/my-test`, are allowed.
+
 ### 2. Run repeated trials (optional)
 
 ```bash
@@ -165,9 +181,60 @@ What it does not do:
   the dashboard's memory for a while before Streamlit removes it; by default,
   at least about 2 minutes (`server.disconnectedSessionTTL`).
 - Stopping the dashboard program clears all of its in-memory settings.
-- It does **not** change which model the benchmark uses. `python3 tasks/ai_runner.py`
-  still reads the `BENCHMARK_*` environment variables.
+- It does **not** change which model terminal runs use: `python3 tasks/ai_runner.py`
+  still reads the `BENCHMARK_*` environment variables. (**Run benchmark**, below,
+  does use the form's settings.)
 - The key is never shown on the page or in error messages, and never saved.
+
+### Run a benchmark from the dashboard
+
+In the same sidebar form, click **Run benchmark**:
+
+1. The Base URL and Model ID are checked first. If they're invalid, nothing starts.
+   (There is no automatic connection test; if the model can't be reached, the run
+   stops and its log explains why.)
+2. A **new folder** is created for the run, e.g. `results/runs/20261013-142530-a1b2c3/`,
+   and the benchmark runs there as a separate program. Existing results, including
+   `results/results.json`, are never overwritten. `results/runs/` is ignored by git.
+3. The **Benchmark run** section in the sidebar refreshes itself every 2 seconds with
+   the progress, the correct/incorrect/error counts, and a plain-English outcome. The
+   rest of the page is not redrawn.
+4. **Stop benchmark** asks the run to save its progress and exit (like Ctrl+C). If it
+   doesn't stop within 10 seconds, it is ended forcibly. The dashboard then shows the
+   run's real saved state, for example "Stopped: 7 of 16 tasks saved", "Stopped before
+   the first task", or "Ended without saving a final status".
+
+Things to know:
+- **One run at a time**, across all tabs.
+- The outcome is based on the saved counts, not just on the run finishing. A run
+  where every task failed is shown as an error, even though the program ended normally.
+- Each run's files are `results.json`, `runner.log` (the program's printed output), and
+  `launcher.json` (its process number, used only for the restart check above).
+  The main results view above still shows `results/results.json` from terminal runs.
+- **Refreshing the page or opening a second tab keeps control of the run**, because the
+  dashboard keeps it in a registry shared by all tabs. **Restarting the dashboard loses
+  that control**, so a run still in progress then can't be stopped from the dashboard.
+  For any run whose saved results still say "running" but that has no live process
+  handle, the dashboard checks (read-only, with `ps`) whether the process number in its
+  `launcher.json` is still running **this** run:
+  - **Still running:** shown as such, and **new runs are blocked** until it finishes.
+  - **Ended:** shown as "ended without saving a final status"; new runs are allowed.
+  - **Can't tell** (for example, no `launcher.json`): shown as **status unknown**, and new
+    runs are blocked until you click *"I've checked: it isn't running. Allow new runs"*.
+    That confirmation is kept in memory only and is asked again after a restart.
+
+  These old runs' files are only read, never changed.
+- **API key safety:** the key is passed to the run only through its environment
+  variables. It is never put on the command line, in `runner.log`, in result files, or in
+  the dashboard's shared registry, and never shown on the page. Environment variables
+  are not a perfect security boundary: on macOS, other programs running as your user
+  (and administrators) can read them. That is fine for a local tool on your own
+  computer, not for a shared or hosted server.
+- **The password box is not a vault.** While the key is typed into the API key box, it
+  sits in that box in your browser (in the page's HTML), as with any web password field.
+  It isn't displayed, but browser extensions or developer tools can read it. Keep the
+  dashboard bound to this computer (`--server.address localhost`) and don't treat the
+  password box as making the key inaccessible.
 
 ## How correctness is checked
 
@@ -191,6 +258,10 @@ correct.
 | `tests/test_benchmark.py` | Unit tests for grading, task validation, and error handling. |
 | `tests/test_model_adapter.py` | Unit tests for model settings, requests, and keeping the API key out of results. |
 | `tests/test_dashboard_model_config.py` | Tests for the dashboard's connection form, using fake server replies. |
+| `tests/test_runner_results_dir.py` | Tests for the runner's `--results-dir` option, using fake answers and temporary folders. |
+| `tasks/run_launcher.py` | Starts a benchmark as a separate program in a new folder, reads its progress, and stops it safely. |
+| `tests/test_run_launcher.py` | Tests for the launcher, using fake runners and a fake local model server. |
+| `tests/test_dashboard_run.py` | Tests for the dashboard's Run and Stop buttons and progress section, using fake runners. |
 | `results/` | Benchmark output. |
 
 ## Scope and limitations

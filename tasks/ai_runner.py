@@ -1,3 +1,4 @@
+import argparse
 import json
 import os
 import shutil
@@ -21,6 +22,8 @@ TASK_FILE = PROJECT_DIR / "tasks" / "benchmark.json"
 RESULTS_DIR = PROJECT_DIR / "results"
 RESULT_FILE = RESULTS_DIR / "results.json"
 HISTORY_DIR = RESULTS_DIR / "history"
+# Where results go when --results-dir is not given.
+DEFAULT_RESULTS_DIR = RESULTS_DIR
 
 # Asks for a predictable last line so the grader can find the final answer.
 # It does not reveal any answers.
@@ -200,8 +203,76 @@ def backup_previous_results():
         print(f"Previous results backed up to: {backup}")
 
 
-def main():
-    global MODEL_CONFIG   # replace the defaults with this run's settings
+def parse_args(argv=None):
+    """Read the command-line options. Unknown or misspelled options stop the program."""
+    parser = argparse.ArgumentParser(
+        description="Run the benchmark against the configured model.",
+        allow_abbrev=False,   # "--results" must not silently mean "--results-dir"
+    )
+    parser.add_argument(
+        "--results-dir",
+        metavar="PATH",
+        help="Folder for results.json and its history/ backups "
+             "(default: results/ in the project). A relative path is taken "
+             "from the folder you run the command in.",
+    )
+    return parser.parse_args(argv)
+
+
+def results_paths(results_dir=None):
+    """
+    Return (results folder, results file, history folder).
+    All three come from ONE folder, so they can never point to different places.
+    No folder given -> exactly the default paths under results/.
+    """
+    if results_dir is None:
+        folder = DEFAULT_RESULTS_DIR
+    else:
+        # A relative path is joined onto the current working directory;
+        # an absolute path stays as it is.
+        folder = Path.cwd() / Path(results_dir).expanduser()
+    return folder, folder / "results.json", folder / "history"
+
+
+def check_results_dir(results_dir):
+    """Return an error message if the --results-dir value is unusable, else None."""
+    if results_dir is None:
+        return None
+    if not results_dir.strip():
+        return "--results-dir must not be empty."
+    folder = results_paths(results_dir)[0]
+    if folder.exists() and not folder.is_dir():
+        return f"--results-dir points to a file, not a folder: {folder}"
+    if is_same_folder(folder, DEFAULT_RESULTS_DIR):
+        return (
+            f"--results-dir points to the default results folder ({DEFAULT_RESULTS_DIR}). "
+            "Choose a different folder, or leave out --results-dir to write there."
+        )
+    return None
+
+
+def is_same_folder(a, b):
+    """
+    True if two paths are the same folder on disk, however they are written
+    (relative, absolute, with "..", through a symlink, or different letter case on macOS).
+    """
+    if a.exists() and b.exists():
+        return os.path.samefile(a, b)      # ask the operating system
+    return a.resolve() == b.resolve()      # folder not created yet: compare cleaned-up paths
+
+
+def main(argv=None):
+    # Replace the defaults with this run's settings.
+    global MODEL_CONFIG, RESULTS_DIR, RESULT_FILE, HISTORY_DIR
+
+    # Options are checked first, before any setting, file, or network request.
+    args = parse_args(argv)
+    problem = check_results_dir(args.results_dir)
+    if problem:
+        sys.exit(f"ERROR: {problem}")
+    if args.results_dir is not None:
+        RESULTS_DIR, RESULT_FILE, HISTORY_DIR = results_paths(args.results_dir)
+
     try:
         MODEL_CONFIG = model_adapter.load_model_config()
     except model_adapter.ModelConfigError as error:
@@ -212,8 +283,12 @@ def main():
     if problem:
         sys.exit(f"ERROR: {problem}")
 
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    backup_previous_results()
+    # Nothing has been written yet. If the folder can't be prepared, stop here.
+    try:
+        RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        backup_previous_results()
+    except OSError as error:
+        sys.exit(f"ERROR: Could not prepare the results folder {RESULTS_DIR}: {error}")
 
     run_info = {
         "model": MODEL_CONFIG.model_id,

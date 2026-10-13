@@ -7,6 +7,7 @@ Streamlit's AppTest runs dashboard.py like a browser would, but inside this
 test. All network calls are FAKE (mocked): no Ollama, internet, or API key needed.
 """
 
+import ast
 import os
 import shutil
 import tempfile
@@ -170,9 +171,36 @@ class TestApiKeySafety(DashboardTestCase):
         at = self.submit(self.open_dashboard())
         self.assertIn("no such model", page_text(at))
 
-    def test_dashboard_never_uses_streamlit_cache(self):
-        # Streamlit caches are shared by all users, so nothing holding the key may be cached.
-        self.assertNotIn("st.cache", DASHBOARD.read_text())
+    def test_dashboard_cache_use_cannot_hold_the_key(self):
+        # Streamlit caches are shared by all users, so nothing holding the key may be
+        # cached. Checked on the code's structure (not its text):
+        # - st.cache_data and the old st.cache are never used;
+        # - st.cache_resource is only a decorator on functions with NO parameters,
+        #   so nothing typed into the form (such as the key) can reach the cache.
+        # tests/test_dashboard_run.py also checks the registry's contents at runtime.
+        tree = ast.parse(DASHBOARD.read_text())
+        attributes = [node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)]
+        self.assertNotIn("cache_data", attributes)
+        self.assertNotIn("cache", attributes)
+
+        def is_cache_resource(node):
+            target = node.func if isinstance(node, ast.Call) else node
+            return isinstance(target, ast.Attribute) and target.attr == "cache_resource"
+
+        decorated = [
+            func for func in ast.walk(tree)
+            if isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and any(is_cache_resource(d) for d in func.decorator_list)
+        ]
+        for func in decorated:
+            args = func.args
+            self.assertEqual(
+                (args.posonlyargs, args.args, args.vararg, args.kwonlyargs, args.kwarg),
+                ([], [], None, [], None),
+                f"cached function {func.name}() must take no parameters",
+            )
+        # st.cache_resource appears only as one of those decorators, never called directly.
+        self.assertEqual(attributes.count("cache_resource"), len(decorated))
 
 
 class TestPrefill(DashboardTestCase):
@@ -219,6 +247,7 @@ class TestExistingDashboardStillWorks(DashboardTestCase):
             (Path(folder) / "tasks").mkdir()
             shutil.copy(DASHBOARD, Path(folder) / "dashboard.py")
             shutil.copy(PROJECT / "tasks" / "model_adapter.py", Path(folder) / "tasks")
+            shutil.copy(PROJECT / "tasks" / "run_launcher.py", Path(folder) / "tasks")
             self.get.return_value = MODEL_LIST
 
             at = self.open_dashboard(Path(folder) / "dashboard.py")

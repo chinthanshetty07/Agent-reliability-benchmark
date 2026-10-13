@@ -10,6 +10,9 @@ __pycache__/
 # Automatic backups of old runs (can be large and noisy)
 results/history/
 
+# Benchmark runs started from the dashboard (one folder per run)
+results/runs/
+
 # Local editor / tool settings
 .claude/
 .vscode/

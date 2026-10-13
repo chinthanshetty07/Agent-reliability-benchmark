@@ -2,6 +2,8 @@
 import json
 import os
 import sys
+import threading
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -13,11 +15,12 @@ REPORT_FILE = (
     ROOT / "results" / "repeated_trials" / "reliability_report.json"
 )
 
-# The model adapter lives in tasks/. Add it to the import path once.
+# The model adapter and run launcher live in tasks/. Add it to the import path once.
 TASKS_DIR = str(ROOT / "tasks")
 if TASKS_DIR not in sys.path:
     sys.path.insert(0, TASKS_DIR)
 import model_adapter  # noqa: E402
+import run_launcher  # noqa: E402
 
 st.set_page_config(
     page_title="AI Agent Reliability Benchmark",
@@ -67,8 +70,9 @@ def model_connection_panel():
         st.header("Configure model")
         st.caption(
             "Settings stay in this browser session only and are never saved. "
-            "They are used for this connection test only: the benchmark runner "
-            "(`python3 tasks/ai_runner.py`) still reads the `BENCHMARK_*` environment variables."
+            "**Test connection** checks them; **Run benchmark** starts a run with them. "
+            "Runs started from the terminal (`python3 tasks/ai_runner.py`) still read "
+            "the `BENCHMARK_*` environment variables."
         )
         with st.form("model_connection"):
             base_url = st.text_input("Base URL", value=default_url)
@@ -79,13 +83,209 @@ def model_connection_panel():
                 help="Only for services that need one. Never saved or displayed.",
             )
             submitted = st.form_submit_button("Test connection")
+            run_clicked = st.form_submit_button("Run benchmark")
 
         if submitted:
             run_connection_test(base_url, model_id, api_key)
+        if run_clicked:
+            start_benchmark(base_url, model_id, api_key)
+
+
+# ---------- Running a benchmark from the dashboard ----------
+
+@st.cache_resource
+def run_registry():
+    """
+    The active benchmark run, shared by every tab and kept across browser
+    refreshes while this dashboard program runs. A dashboard restart clears it.
+    Takes no arguments and never holds the API key or the model settings:
+    only the process handle, run folder, model ID, cleaned address and times,
+    plus the folder NAMES of old runs the user confirmed are not running.
+    """
+    return {"lock": threading.Lock(), "run": None, "confirmed_not_running": set()}
+
+
+def start_benchmark(base_url, model_id, api_key):
+    """Check the form settings, then start ONE run in a brand-new folder."""
+    try:
+        # Validates the address and model ID; nothing is started if they are invalid.
+        config = model_adapter.build_model_config(base_url, model_id, api_key)
+    except model_adapter.ModelConfigError as error:
+        st.error(str(error))
+        return
+
+    registry = run_registry()
+    with registry["lock"]:   # two tabs clicking at once still start only one run
+        current = registry["run"]
+        if current is not None and current["process"].poll() is None:
+            st.error("A benchmark is already running. Stop it or wait for it to finish.")
+            return
+        # Runs this dashboard has no handle for (e.g. started before a restart)
+        # may still be active; never start a second run alongside them.
+        blocking = run_launcher.runs_blocking_a_new_start(
+            exclude=[current["folder"]] if current is not None else [],
+            confirmed_not_running=registry["confirmed_not_running"],
+        )
+        if blocking:
+            names = ", ".join(f"`{folder.name}`" for folder, _ in blocking)
+            st.error(
+                f"New runs are blocked: {names} may still be running (started before the "
+                "dashboard restarted). See **Benchmark run** below."
+            )
+            return
+        try:
+            folder = run_launcher.create_run_folder()
+            # The key goes only into the run's environment, never into the registry.
+            process = run_launcher.start_run(config, folder)
+        except (run_launcher.LaunchError, OSError) as error:
+            st.error(model_adapter.redact(f"Could not start the benchmark: {error}", config))
+            return
+        except Exception as error:
+            # Anything else (e.g. a ValueError for an invalid setting): show a short,
+            # redacted message instead of a traceback. No run is registered.
+            st.error(model_adapter.redact(
+                f"Could not start the benchmark ({type(error).__name__}): {error}", config
+            ))
+            return
+        registry["run"] = {
+            "process": process,
+            "folder": folder,
+            "model_id": config.model_id,
+            "endpoint": model_adapter.safe_base_url(config.base_url),
+            "started_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "stop_result": None,
+        }
+
+
+def stop_benchmark(run):
+    """Ask the run to stop; it is ended forcibly only if it ignores the request."""
+    with st.spinner("Stopping: asking the run to save its progress and exit..."):
+        run["stop_result"] = run_launcher.stop_run(run["process"])
+
+
+SHOW_MESSAGE = {"info": st.info, "success": st.success, "warning": st.warning, "error": st.error}
+
+
+def show_run(run):
+    """Draw the run's REAL state: process status plus what it actually saved."""
+    described = run_launcher.describe_run(run["process"], run["folder"])
+    level, message = run_launcher.outcome(described)
+    st.caption(
+        f"Model `{run['model_id']}` at {run['endpoint']} · started {run['started_at']} · "
+        f"folder `results/runs/{run['folder'].name}`"
+    )
+    if described["total"]:
+        done = described["completed"] or 0
+        st.progress(min(done / described["total"], 1.0), text=f"{done} of {described['total']} tasks")
+        st.caption(
+            f"Correct {described['correct']} · Incorrect {described['incorrect']} · "
+            f"Errors {described['errors']}"
+        )
+    SHOW_MESSAGE[level](message)
+    if run["stop_result"] == "killed":
+        st.caption("The run did not stop when asked, so it was ended forcibly.")
+    if described["state"] in ("failed", "stopped_before_start", "stopped_unexpectedly"):
+        tail = run_launcher.read_log_tail(run["folder"])
+        if tail:
+            st.code(tail, language=None)
+    return described
+
+
+@st.fragment(run_every="2s")
+def live_run_section():
+    """Redrawn on its own every 2 seconds while a run is active; the rest of the page is not."""
+    run = run_registry()["run"]
+    if run is None:
+        return
+    described = show_run(run)
+    if described["state"] == "running":
+        if st.button("Stop benchmark"):
+            stop_benchmark(run)
+            st.rerun()   # redraw everything with the real final state
+    else:
+        st.rerun()       # the run just ended: one full redraw turns this timer off
+
+
+def benchmark_run_section():
+    with st.sidebar:
+        st.header("Benchmark run")
+        run = run_registry()["run"]
+        if run is not None and run["process"].poll() is None:
+            live_run_section()
+        elif run is not None:
+            show_run(run)
+        else:
+            st.caption("No benchmark has been started from this dashboard yet.")
+
+        show_runs_without_handle(run)
+
+
+def show_runs_without_handle(run):
+    """
+    Runs with no final status that this dashboard has no process handle for
+    (e.g. started before a restart): saved status "running", or no readable
+    results yet. Their files are only read, never written. A process check
+    (read-only) tells which may be active.
+    """
+    registry = run_registry()
+    exclude = [run["folder"]] if run is not None else []
+    for folder, saved_status in run_launcher.runs_without_final_status(exclude=exclude):
+        name = folder.name
+        liveness = run_launcher.check_process_alive(folder)
+        has_results = saved_status == "running"
+        if saved_status == "not_started":
+            what_was_saved = "it hasn't saved any results yet (it may still be starting up or on its first task)"
+        else:
+            what_was_saved = "its results file can't be read"
+
+        if liveness == "active":
+            if has_results:
+                st.warning(
+                    f"`{name}` is still running: it was started before the dashboard restarted, "
+                    "so it can't be stopped from here. New runs are blocked until it finishes."
+                )
+            else:
+                st.warning(
+                    f"`{name}` is still running, but {what_was_saved}. It was started before the "
+                    "dashboard restarted, so it can't be stopped from here. New runs are blocked "
+                    "until it finishes."
+                )
+        elif liveness == "ended":
+            # Runs that ended without saving readable results are not listed here
+            # (e.g. every failed start); run history covers them separately.
+            if has_results:
+                st.info(
+                    f"`{name}` ended without saving a final status (its program is no longer "
+                    "running). Results up to its last saved task are kept; its files are left untouched."
+                )
+        elif name in registry["confirmed_not_running"]:
+            st.info(
+                f"Status unknown for `{name}`. You confirmed it isn't running, so new runs are "
+                "allowed (this confirmation is forgotten when the dashboard restarts)."
+            )
+        else:
+            if has_results:
+                st.warning(
+                    f"Status unknown for `{name}`: its saved results still say \"running\", but this "
+                    "dashboard has no live process for it and can't check whether it is still "
+                    "running. It can't be stopped from here, and its files are left untouched. "
+                    "New runs are blocked until you confirm it isn't running."
+                )
+            else:
+                st.warning(
+                    f"Status unknown for `{name}`: {what_was_saved}, and this dashboard has no live "
+                    "process for it and can't check whether it is still running. It can't be "
+                    "stopped from here, and its files are left untouched. New runs are blocked "
+                    "until you confirm it isn't running."
+                )
+            if st.button("I've checked: it isn't running. Allow new runs", key=f"confirm-{name}"):
+                registry["confirmed_not_running"].add(name)
+                st.rerun()
 
 
 # Drawn before the results below, so it still works when no results exist yet.
 model_connection_panel()
+benchmark_run_section()
 
 st.title("AI Agent Reliability Benchmark")
 st.caption("Finance domain · Local model evaluation")
