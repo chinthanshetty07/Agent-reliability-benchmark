@@ -284,5 +284,114 @@ class TestNoSecretInSavedResults(unittest.TestCase):
         ])
 
 
+class TestBackendSelection(unittest.TestCase):
+    """BENCHMARK_BACKEND chooses who answers; the default is unchanged (Ollama / OpenAI-compatible)."""
+
+    HF_MODEL = "Qwen/Qwen2.5-0.5B-Instruct"
+
+    def test_default_backend_is_unchanged(self):
+        config = model_adapter.load_model_config({})
+        self.assertEqual(config.backend, "openai")
+        self.assertEqual(config.base_url, "http://127.0.0.1:11434/v1")
+        self.assertEqual(config.model_id, "qwen3:4b")
+        self.assertEqual(ModelConfig().backend, "openai")
+
+    def test_explicit_openai_backend_behaves_like_the_default(self):
+        config = model_adapter.load_model_config({"BENCHMARK_BACKEND": "openai",
+                                                  "BENCHMARK_BASE_URL": "https://example.test/v1/"})
+        self.assertEqual((config.backend, config.base_url), ("openai", "https://example.test/v1"))
+
+    def test_transformers_backend_needs_no_address_or_key(self):
+        config = model_adapter.load_model_config({
+            "BENCHMARK_BACKEND": "Transformers",           # case doesn't matter
+            "BENCHMARK_MODEL_ID": self.HF_MODEL,
+            "BENCHMARK_BASE_URL": "https://ignored.example/v1",
+            "BENCHMARK_API_KEY": FAKE_KEY,
+        })
+        self.assertEqual(config.backend, "transformers")
+        self.assertEqual(config.model_id, self.HF_MODEL)
+        self.assertEqual(config.base_url, "transformers://local")
+        self.assertIsNone(config.api_key)                   # a local model never receives a key
+
+    def test_local_backend_never_keeps_a_key_even_if_given_directly(self):
+        config = model_adapter.build_model_config(None, self.HF_MODEL, FAKE_KEY, backend="transformers")
+        self.assertIsNone(config.api_key)
+        self.assertEqual(config.base_url, "transformers://local")
+
+    def test_transformers_backend_requires_an_explicit_model(self):
+        with self.assertRaises(ModelConfigError) as caught:
+            model_adapter.load_model_config({"BENCHMARK_BACKEND": "transformers"})
+        self.assertIn("BENCHMARK_MODEL_ID", str(caught.exception))
+
+    def test_unknown_backend_is_rejected(self):
+        with self.assertRaises(ModelConfigError) as caught:
+            model_adapter.load_model_config({"BENCHMARK_BACKEND": "vllm"})
+        self.assertIn("BENCHMARK_BACKEND", str(caught.exception))
+        with self.assertRaises(ModelConfigError):
+            model_adapter.build_model_config("http://h/v1", "m", backend="vllm")
+
+    def test_dashboard_style_call_is_unchanged(self):
+        # dashboard.py and run_launcher.py call build_model_config(base_url, model_id, api_key).
+        config = model_adapter.build_model_config("http://h/v1", "m", FAKE_KEY)
+        self.assertEqual((config.backend, config.base_url, config.api_key), ("openai", "http://h/v1", FAKE_KEY))
+        with self.assertRaises(ModelConfigError):
+            model_adapter.build_model_config("transformers://local", "m")   # still http/https only
+
+    def test_transformers_requests_go_to_the_local_adapter_not_the_network(self):
+        import hf_adapter
+        config = model_adapter.build_model_config(None, self.HF_MODEL, backend="transformers")
+        with mock.patch.object(hf_adapter, "ask_model", return_value=("Final answer: 1", "", "stop")) as ask, \
+             mock.patch.object(hf_adapter, "check_model_available", return_value=None) as check, \
+             mock.patch("model_adapter.requests.post") as post, \
+             mock.patch("model_adapter.requests.get") as get:
+            self.assertIsNone(model_adapter.check_model_available(config))
+            reply = model_adapter.ask_model(config, "system", "question")
+        self.assertEqual(reply, ("Final answer: 1", "", "stop"))
+        check.assert_called_once_with(self.HF_MODEL)
+        ask.assert_called_once_with(config, "system", "question")
+        post.assert_not_called()
+        get.assert_not_called()
+
+    def test_openai_requests_do_not_touch_the_local_adapter(self):
+        import hf_adapter
+        with mock.patch.object(hf_adapter, "ask_model") as ask, \
+             mock.patch("model_adapter.requests.post", return_value=FakeResponse(lines=GOOD_STREAM)):
+            model_adapter.ask_model(ModelConfig(), "system", "question")
+        ask.assert_not_called()
+
+    def test_saved_base_url_for_local_runs(self):
+        self.assertEqual(model_adapter.safe_base_url("transformers://local"), "transformers://local")
+
+    def test_full_runner_run_with_a_fake_local_model_keeps_the_results_format(self):
+        # The real runner, with the local backend faked (no torch, no download),
+        # writing only to a temporary folder.
+        import hf_adapter
+        expected = {t["question"]: t["expected_answer"]
+                    for t in json.loads((Path(__file__).parent.parent / "tasks" / "benchmark.json").read_text())}
+
+        def fake_answer(config, system_prompt, question):
+            return f"Final answer: {expected[question]}", "", "stop"
+
+        with tempfile.TemporaryDirectory() as folder, \
+             mock.patch.dict("os.environ", {"BENCHMARK_BACKEND": "transformers",
+                                            "BENCHMARK_MODEL_ID": self.HF_MODEL}), \
+             mock.patch.multiple(ai_runner, MODEL_CONFIG=ai_runner.MODEL_CONFIG,
+                                 RESULTS_DIR=ai_runner.RESULTS_DIR, RESULT_FILE=ai_runner.RESULT_FILE,
+                                 HISTORY_DIR=ai_runner.HISTORY_DIR), \
+             mock.patch.object(hf_adapter, "check_model_available", return_value=None), \
+             mock.patch.object(hf_adapter, "ask_model", side_effect=fake_answer), \
+             mock.patch("model_adapter.requests.post") as post, \
+             mock.patch("builtins.print"):
+            ai_runner.main(["--results-dir", str(Path(folder) / "hf-run")])
+            saved = json.loads((Path(folder) / "hf-run" / "results.json").read_text())
+        post.assert_not_called()
+        self.assertEqual(saved["model"], self.HF_MODEL)
+        self.assertEqual(saved["base_url"], "transformers://local")
+        self.assertEqual(list(saved), ["model", "base_url", "task_file", "started_at",
+                                       "finished_at", "run_status", "summary", "results"])
+        self.assertEqual(saved["run_status"], "finished")
+        self.assertEqual(saved["summary"]["correct"], len(expected))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,8 @@
+# OPTIONAL: only for the local Hugging Face backend (BENCHMARK_BACKEND=transformers).
+# Install into the separate .venv-hf environment (Python 3.12), not the main .venv.
+# See README: "Run the benchmark with a local Hugging Face model".
+# Not yet installed or tested on this project: versions will be pinned after the
+# first successful install and test run.
+requests==2.34.2    # the benchmark runner imports it (same version as requirements.txt)
+torch               # runs the model (CPU or Apple GPU via MPS)
+transformers        # loads the tokenizer and model, applies the chat template

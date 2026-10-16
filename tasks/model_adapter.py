@@ -11,8 +11,11 @@ streaming). Ollama supports this, and so do many hosted services, but not
 every provider behaves identically. Only local Ollama has been tested.
 
 Settings come from environment variables (never from files in the repo):
-    BENCHMARK_BASE_URL   server address   (default: local Ollama)
-    BENCHMARK_MODEL_ID   model name       (default: qwen3:4b)
+    BENCHMARK_BACKEND    "openai" (default: an OpenAI-compatible server such as
+                         Ollama) or "transformers" (a local Hugging Face model,
+                         see hf_adapter.py; needs the optional .venv-hf packages)
+    BENCHMARK_BASE_URL   server address   (default: local Ollama; not used by "transformers")
+    BENCHMARK_MODEL_ID   model name       (default: qwen3:4b; required for "transformers")
     BENCHMARK_API_KEY    private key      (optional; never saved or printed)
 """
 
@@ -30,6 +33,13 @@ DEFAULT_MODEL_ID = "qwen3:4b"
 ENV_BASE_URL = "BENCHMARK_BASE_URL"
 ENV_MODEL_ID = "BENCHMARK_MODEL_ID"
 ENV_API_KEY = "BENCHMARK_API_KEY"
+ENV_BACKEND = "BENCHMARK_BACKEND"
+
+BACKEND_OPENAI = "openai"              # OpenAI-compatible HTTP server (Ollama); the default
+BACKEND_TRANSFORMERS = "transformers"  # local Hugging Face model, loaded in this process
+BACKENDS = (BACKEND_OPENAI, BACKEND_TRANSFORMERS)
+# Recorded as base_url for local runs, so the results format stays the same.
+TRANSFORMERS_BASE_URL = "transformers://local"
 
 # Shown when there are too many models to list in an error message.
 MAX_MODELS_IN_ERROR = 20
@@ -57,16 +67,31 @@ class ModelConfig:
     read_timeout: int = 120      # seconds to wait for the NEXT streamed chunk (covers model loading)
     task_time_limit: int = 300   # seconds allowed for one whole answer, so nothing hangs forever
 
+    backend: str = BACKEND_OPENAI   # which code talks to the model (see BACKENDS)
 
-def build_model_config(base_url, model_id, api_key=None):
+
+def build_model_config(base_url, model_id, api_key=None, backend=BACKEND_OPENAI):
     """
     Check the given settings and turn them into a ModelConfig.
     Used by both the runner (values from environment variables) and the
     dashboard (values typed into a form). No network request happens here,
     so a bad address is rejected before anything is sent.
     """
-    base_url = (base_url or "").strip().rstrip("/")
+    backend = (backend or BACKEND_OPENAI).strip().lower()
+    if backend not in BACKENDS:
+        raise ModelConfigError(f"Backend must be one of: {', '.join(BACKENDS)}.")
     model_id = (model_id or "").strip()
+
+    if backend == BACKEND_TRANSFORMERS:
+        # A local model: no server address and no API key are used.
+        if not model_id:
+            raise ModelConfigError(
+                "Model ID must be a Hugging Face model, e.g. Qwen/Qwen2.5-0.5B-Instruct."
+            )
+        return ModelConfig(base_url=TRANSFORMERS_BASE_URL, model_id=model_id,
+                           api_key=None, backend=BACKEND_TRANSFORMERS)
+
+    base_url = (base_url or "").strip().rstrip("/")
     api_key = (api_key or "").strip() or None
 
     parts = urlsplit(base_url)
@@ -88,6 +113,19 @@ def load_model_config(env=None):
     Anything not set falls back to the local Ollama defaults.
     """
     env = os.environ if env is None else env
+
+    backend = (env.get(ENV_BACKEND) or "").strip().lower() or BACKEND_OPENAI
+    if backend not in BACKENDS:
+        raise ModelConfigError(f"{ENV_BACKEND} must be one of: {', '.join(BACKENDS)}.")
+    if backend == BACKEND_TRANSFORMERS:
+        # The default model ID is an Ollama name, so a Hugging Face model must be named.
+        model_id = (env.get(ENV_MODEL_ID) or "").strip()
+        if not model_id:
+            raise ModelConfigError(
+                f"{ENV_MODEL_ID} is required with {ENV_BACKEND}={BACKEND_TRANSFORMERS}, "
+                "e.g. Qwen/Qwen2.5-0.5B-Instruct."
+            )
+        return build_model_config(None, model_id, backend=BACKEND_TRANSFORMERS)
 
     base_url = (env.get(ENV_BASE_URL) or "").strip() or DEFAULT_BASE_URL
     model_id = (env.get(ENV_MODEL_ID) or "").strip() or DEFAULT_MODEL_ID
@@ -132,7 +170,12 @@ def check_model_available(config):
     """
     Ask the server which models it has.
     Returns None if the model is available, otherwise a readable error message.
+    For the transformers backend: load the model from the local cache instead.
     """
+    if config.backend == BACKEND_TRANSFORMERS:
+        import hf_adapter   # only imported when this backend is used
+        return hf_adapter.check_model_available(config.model_id)
+
     where = safe_base_url(config.base_url)
     try:
         response = requests.get(
@@ -174,7 +217,12 @@ def ask_model(config, system_prompt, question):
     Send one question to the model using streaming.
     Returns (answer_text, reasoning_text, finish_reason).
     Raises an exception with a readable message if anything goes wrong.
+    For the transformers backend: answer with the local model instead.
     """
+    if config.backend == BACKEND_TRANSFORMERS:
+        import hf_adapter   # only imported when this backend is used
+        return hf_adapter.ask_model(config, system_prompt, question)
+
     payload = {
         "model": config.model_id,
         "messages": [

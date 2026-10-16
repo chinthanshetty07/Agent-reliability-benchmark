@@ -236,6 +236,44 @@ Things to know:
   dashboard bound to this computer (`--server.address localhost`) and don't treat the
   password box as making the key inaccessible.
 
+## Run the benchmark with a local Hugging Face model (optional)
+
+`BENCHMARK_BACKEND=transformers` runs a Hugging Face chat model inside the benchmark
+process with the `transformers` library, instead of asking Ollama. Ollama stays the
+default. **Status: implemented and unit-tested with fake models only; not yet tested
+with real torch/transformers, so compatibility, speed and memory use are unverified.**
+
+1. Create a separate environment with Python 3.12 (the main `.venv` doesn't need these
+   large packages), then install the optional packages:
+
+   ```bash
+   uv venv --python 3.12 .venv-hf
+   ```
+
+   ```bash
+   uv pip install --python .venv-hf -r requirements-hf.txt
+   ```
+
+2. Download the model once (about 1 GB, into `~/.cache/huggingface`, outside the project).
+   The benchmark itself never downloads anything: it only loads files already in that cache.
+
+   ```bash
+   .venv-hf/bin/python -c "from huggingface_hub import snapshot_download; snapshot_download('Qwen/Qwen2.5-0.5B-Instruct')"
+   ```
+
+3. Run the benchmark into its own folder (your existing results are not touched):
+
+   ```bash
+   BENCHMARK_BACKEND=transformers BENCHMARK_MODEL_ID=Qwen/Qwen2.5-0.5B-Instruct .venv-hf/bin/python tasks/ai_runner.py --results-dir results/runs/hf-qwen2.5-0.5b-instruct
+   ```
+
+How it works: the model is loaded once (Apple GPU `mps` if available, otherwise CPU),
+each question is formatted with the model's own chat template, answers are generated
+greedily (no randomness) with at most 512 new tokens and the usual time limit, and only
+the newly generated text is graded. Results record `base_url` as `transformers://local`.
+Tips: stop Ollama's model first (`ollama stop qwen3:4b`) to free memory on an 8 GB Mac.
+The dashboard's **Run benchmark** button still uses Ollama only.
+
 ## How correctness is checked
 
 The model is asked to end its reply with `Final answer: <number>`.
@@ -251,7 +289,7 @@ correct.
 |---|---|
 | `tasks/benchmark.json` | The questions. Each needs `task_id`, `question`, `expected_answer`, and `category` (the older name `domain` also works). |
 | `tasks/ai_runner.py` | Runs the benchmark: asks each question through the adapter, grades the answer and records the results. |
-| `tasks/model_adapter.py` | Talks to the model server: settings, API key, streaming request, and model check. |
+| `tasks/model_adapter.py` | Talks to the model: settings, backend choice (`BENCHMARK_BACKEND`), API key, streaming request, and model check. |
 | `tasks/grading.py` | Finds the model's final number and compares it with `expected_answer`. |
 | `repeat_benchmark.py` | Runs the benchmark several times and measures per-task consistency. |
 | `dashboard.py` | Streamlit dashboard for the results, plus a sidebar form to test a model connection. |
@@ -262,6 +300,9 @@ correct.
 | `tasks/run_launcher.py` | Starts a benchmark as a separate program in a new folder, reads its progress, and stops it safely. |
 | `tests/test_run_launcher.py` | Tests for the launcher, using fake runners and a fake local model server. |
 | `tests/test_dashboard_run.py` | Tests for the dashboard's Run and Stop buttons and progress section, using fake runners. |
+| `tasks/hf_adapter.py` | Optional local Hugging Face backend: loads a cached model once and answers with it. |
+| `tests/test_hf_adapter.py` | Tests for the Hugging Face backend, using a fake tokenizer and model (no download). |
+| `requirements-hf.txt` | Optional packages for the Hugging Face backend (install into `.venv-hf`). |
 | `results/` | Benchmark output. |
 
 ## Scope and limitations
